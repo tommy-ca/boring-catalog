@@ -2,6 +2,8 @@
 import os
 import subprocess
 import sys
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 import pytest
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -26,7 +28,10 @@ def dummy_parquet(tmp_path):
 
 def run_cli(args, cwd):
     cmd = [sys.executable, "-m", "boringcatalog.cli"] + args
-    result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    env = os.environ.copy()
+    src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [src_path, env.get("PYTHONPATH")]))
+    result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=env)
     print("STDOUT:\n", result.stdout)
     print("STDERR:\n", result.stderr)
     return result
@@ -227,3 +232,40 @@ def test_manual_index_loading(tmp_path):
     assert catalog2.name == "boring"
     assert catalog2.uri == str(custom_catalog_path)
     assert catalog2.properties["warehouse"] == "manualwarehouse" 
+
+
+def test_slatedb_catalog_basic(tmp_path):
+    pytest.importorskip("slatedb")
+
+    warehouse_dir = tmp_path / "warehouse"
+    warehouse_dir.mkdir()
+    slate_path = tmp_path / "slatedb.db"
+
+    catalog = BoringCatalog(
+        "slate",
+        storage_backend="slatedb",
+        slatedb_path=str(slate_path),
+        warehouse=str(warehouse_dir),
+    )
+
+    catalog.create_namespace("ns")
+    schema = pa.schema([("id", pa.int64())])
+    table = catalog.create_table("ns.tbl", schema)
+
+    data = pa.Table.from_pydict({"id": [1, 2, 3]})
+    table.append(data)
+
+    tables = catalog.list_tables("ns")
+    assert tables == [("ns", "tbl")]
+
+    loaded = catalog.load_table("ns.tbl")
+    assert loaded.name() == ("ns", "tbl")
+    assert catalog.catalog["tables"]["ns.tbl"]["metadata_location"] == loaded.metadata_location
+
+    catalog.drop_table("ns.tbl")
+    assert catalog.list_tables("ns") == []
+
+    catalog.drop_namespace("ns")
+    assert catalog.list_namespaces() == []
+
+    catalog.close()

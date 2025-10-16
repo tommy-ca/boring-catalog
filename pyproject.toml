@@ -12,7 +12,8 @@ dependencies = [
     "pyiceberg>=0.9.0",
     "click>=8.0.0",
     "duckdb>=0.9.0",
-    "pyiceberg[pyarrow]>=0.9.0"
+    "pyiceberg[pyarrow]>=0.9.0",
+    "slatedb>=0.8.1"
 ]
 urls = {Homepage = "https://github.com/boringdata/boring-catalog"}
 
