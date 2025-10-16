@@ -10,6 +10,8 @@ Boring Catalog provides a lightweight Apache Iceberg catalog implementation that
 - DuckDB integration for ad-hoc exploration
 - SlateDB (optional) for catalog metadata storage
 - PyArrow / Pandas for data handling in tests
+- uv for dependency and task management
+- Ruff for linting and formatting
 
 ## Project Conventions
 
@@ -30,6 +32,7 @@ Boring Catalog provides a lightweight Apache Iceberg catalog implementation that
 - CLI workflows are validated by invoking `python -m boringcatalog.cli` within temporary workspaces.
 - Table operations are exercised through PyIceberg APIs; tests use temporary warehouses and in-memory data.
 - Optional SlateDB tests are guarded with `pytest.importorskip("slatedb")` to avoid failures when the dependency is missing.
+- Use `uv run ...` when invoking tooling to ensure the project environment is respected.
 
 ### Git Workflow
 - Default branch is `main`.

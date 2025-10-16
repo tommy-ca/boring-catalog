@@ -98,6 +98,24 @@ This creates a SlateDB database at `/tmp/mycatalog.db` to store namespace and ta
 
 Once initialized, the CLI and Python API behave the same regardless of backend. You can inspect the current backend and its configuration in `.ice/index`.
 
+## Development
+
+### Prerequisites
+- Install [uv](https://docs.astral.sh/uv/) for environment and task management.
+- Ensure Python 3.10+ is available locally.
+
+### Environment Setup
+```bash
+uv pip install -e .[dev]
+```
+
+### Quality Gates
+- Lint: `uv run ruff check .`
+- Format: `uv run ruff format .`
+- Tests: `uv run pytest`
+
+Run these commands (or the relevant subset) before pushing changes or opening a pull request.
+
 ## Python Usage
 
 ```python
