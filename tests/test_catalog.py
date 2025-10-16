@@ -12,6 +12,7 @@ import json
 from boringcatalog import BoringCatalog
 import shutil
 import logging
+from pyiceberg.exceptions import NamespaceNotEmptyError
 
 @pytest.fixture(scope="function")
 def tmp_catalog_dir(tmp_path):
@@ -269,3 +270,69 @@ def test_slatedb_catalog_basic(tmp_path):
     assert catalog.list_namespaces() == []
 
     catalog.close()
+
+
+def test_slatedb_namespace_and_rename_flow(tmp_path):
+    pytest.importorskip("slatedb")
+
+    warehouse_dir = tmp_path / "warehouse"
+    warehouse_dir.mkdir()
+    slate_path = tmp_path / "slatedb.db"
+
+    catalog = BoringCatalog(
+        "slate",
+        storage_backend="slatedb",
+        slatedb_path=str(slate_path),
+        warehouse=str(warehouse_dir),
+    )
+
+    catalog.create_namespace("ns")
+    catalog.create_namespace("dst")
+    schema = pa.schema([("id", pa.int64())])
+    catalog.create_table("ns.tbl", schema)
+
+    with pytest.raises(NamespaceNotEmptyError):
+        catalog.drop_namespace("ns")
+
+    catalog.rename_table("ns.tbl", "dst.tbl2")
+    renamed = catalog.load_table("dst.tbl2")
+    assert renamed.name() == ("dst", "tbl2")
+    assert catalog.list_tables("ns") == []
+
+    catalog.drop_namespace("ns")
+    catalog.drop_table("dst.tbl2")
+    catalog.drop_namespace("dst")
+    catalog.close()
+
+
+def test_cli_init_slatedb_backend(tmp_path):
+    pytest.importorskip("slatedb")
+
+    warehouse_dir = tmp_path / "warehouse"
+    warehouse_dir.mkdir()
+    slate_path = tmp_path / "slatedb.db"
+
+    result = run_cli([
+        "init",
+        "--catalog-backend", "slatedb",
+        "--slatedb-path", str(slate_path),
+        "-p", f"warehouse={warehouse_dir}",
+    ], cwd=tmp_path)
+    assert result.returncode == 0
+
+    index_path = tmp_path / ".ice" / "index"
+    with open(index_path) as f:
+        index = json.load(f)
+
+    assert index["storage_backend"] == "slatedb"
+    assert index["storage_config"]["slatedb_path"] == str(slate_path)
+
+    prev_cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        catalog = BoringCatalog()
+        assert catalog.storage_backend == "slatedb"
+        assert catalog.uri == str(slate_path)
+        catalog.close()
+    finally:
+        os.chdir(prev_cwd)

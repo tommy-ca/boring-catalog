@@ -33,6 +33,17 @@ The system SHALL support SlateDB as an optional storage backend that stores name
 - **THEN** the SlateDB store SHALL persist the namespace/table combination under a `table:` key with the latest `metadata_location`
 - **AND** it SHALL reject updates when the stored `metadata_location` does not match the expected location.
 
+#### Scenario: Prevent namespace deletion while tables exist
+- **GIVEN** a SlateDB-backed catalog where a namespace contains tables
+- **WHEN** the namespace is dropped
+- **THEN** the operation SHALL raise `NamespaceNotEmptyError`
+- **AND** the namespace SHALL remain present until all tables are removed.
+
+#### Scenario: Rename table across namespaces
+- **GIVEN** a SlateDB-backed catalog with two namespaces
+- **WHEN** a table is renamed from one namespace/name to another
+- **THEN** the SlateDB store SHALL update the destination key and remove the original key without losing metadata.
+
 #### Scenario: Optional dependency handling
 - **GIVEN** SlateDB Python bindings are not installed
 - **WHEN** the user selects `--catalog-backend slatedb`
