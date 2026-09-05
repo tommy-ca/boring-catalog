@@ -35,12 +35,20 @@ def load_index():
     except (FileNotFoundError, json.JSONDecodeError):
         return None
 
-def save_index(properties, catalog_uri=None, catalog_name=None):
-    """Save configuration to .ice/index with separate catalog_uri, catalog_name, and properties sections."""
+def save_index(
+    properties,
+    catalog_uri=None,
+    catalog_name=None,
+    storage_backend="json",
+    storage_config=None,
+):
+    """Save configuration to .ice/index with separate catalog metadata."""
     config = {
         "catalog_uri": catalog_uri,
         "catalog_name": catalog_name,
-        "properties": properties
+        "properties": properties,
+        "storage_backend": storage_backend,
+        "storage_config": storage_config or {},
     }
     index_path = os.path.join(ensure_ice_dir(), 'index')
     with open(index_path, 'w') as f:
@@ -57,6 +65,11 @@ def get_catalog():
     properties = config.get("properties", {})
     if config.get("catalog_uri"):
         properties["uri"] = config["catalog_uri"]
+    storage_backend = config.get("storage_backend")
+    if storage_backend:
+        properties["storage_backend"] = storage_backend
+    for key, value in (config.get("storage_config") or {}).items():
+        properties[key] = value
     # Use catalog_name from top-level field if present, else default
     catalog_name = config.get("catalog_name", DEFAULT_CATALOG_NAME)
     return BoringCatalog(catalog_name, **properties)
@@ -115,7 +128,11 @@ def cli(ctx):
 @click.option('--catalog', help='Custom location for catalog.json (default: warehouse/catalog/catalog_<catalog_name>.json)')
 @click.option('--property', '-p', multiple=True, help='Properties in the format key=value')
 @click.option('--catalog-name', default=DEFAULT_CATALOG_NAME, show_default=True, help='Name of the catalog (used in file naming and metadata)')
-def init(catalog, property, catalog_name):
+@click.option('--catalog-backend', type=click.Choice(['json', 'slatedb']), default='json', show_default=True, help='Catalog storage backend to use')
+@click.option('--slatedb-path', help='Filesystem path for the SlateDB database (required for SlateDB backend)')
+@click.option('--slatedb-url', help='Optional object store URL for SlateDB (e.g. s3://bucket/prefix)')
+@click.option('--slatedb-env-file', help='Optional SlateDB environment file for credentials')
+def init(catalog, property, catalog_name, catalog_backend, slatedb_path, slatedb_url, slatedb_env_file):
     """Initialize a new Boring Catalog."""
 
     try:
@@ -126,26 +143,65 @@ def init(catalog, property, catalog_name):
                 properties[key.strip()] = value.strip()
             except ValueError:
                 raise click.ClickException(f"Invalid property format: {prop}. Use key=value format")
-        
-        if not catalog and not "warehouse" in properties:
-            catalog = f"warehouse/catalog/catalog_{catalog_name}.json"
-            properties["warehouse"] = "warehouse"
 
-        elif not catalog and "warehouse" in properties:
-            catalog = f"{properties['warehouse']}/catalog/catalog_{catalog_name}.json"
+        backend = catalog_backend.lower()
+        storage_config = {}
+        runtime_properties = dict(properties)
+        catalog_identity = None
 
-        # Do NOT save catalog_name in properties anymore
-        save_index(properties, catalog, catalog_name)
+        if backend == 'json':
+            if not catalog and "warehouse" not in properties:
+                catalog = f"warehouse/catalog/catalog_{catalog_name}.json"
+                runtime_properties["warehouse"] = "warehouse"
+            elif not catalog and "warehouse" in properties:
+                catalog = f"{properties['warehouse']}/catalog/catalog_{catalog_name}.json"
 
-        properties["uri"] = catalog
-        catalog_instance = BoringCatalog(catalog_name, **properties)
-        
-        # Display information in specific order
+            if not catalog:
+                raise click.ClickException("JSON backend requires a catalog file path; provide --catalog or set warehouse property")
+
+            runtime_properties["uri"] = catalog
+            runtime_properties["storage_backend"] = backend
+            catalog_identity = catalog
+        elif backend == 'slatedb':
+            if not slatedb_path:
+                raise click.ClickException("SlateDB backend requires --slatedb-path")
+            storage_config = {
+                "slatedb_path": slatedb_path,
+            }
+            if slatedb_url:
+                storage_config["slatedb_url"] = slatedb_url
+            if slatedb_env_file:
+                storage_config["slatedb_env_file"] = slatedb_env_file
+
+            runtime_properties["storage_backend"] = backend
+            runtime_properties.update(storage_config)
+            catalog_identity = slatedb_url or slatedb_path
+
+        else:
+            raise click.ClickException(f"Unsupported catalog backend: {backend}")
+
+        index_properties = dict(properties)
+        if backend == 'json' and runtime_properties.get('warehouse'):
+            index_properties.setdefault('warehouse', runtime_properties['warehouse'])
+
+        save_index(
+            index_properties,
+            catalog_identity,
+            catalog_name,
+            storage_backend=backend,
+            storage_config=storage_config,
+        )
+
+        catalog_instance = BoringCatalog(catalog_name, **runtime_properties)
+
         click.echo(f"Initialized Boring Catalog in {os.path.join('.ice', 'index')}")
-        click.echo(f"Catalog location: {catalog}")
-        if "warehouse" in properties:
-            click.echo(f"Warehouse location: {properties['warehouse']}")
+        if catalog_identity:
+            click.echo(f"Catalog storage: {catalog_identity}")
+        if "warehouse" in runtime_properties:
+            click.echo(f"Warehouse location: {runtime_properties['warehouse']}")
+        click.echo(f"Catalog backend: {backend}")
         click.echo(f"Catalog name: {catalog_name}")
+        catalog_instance.close()
 
     except Exception as e:
         click.echo(f"Error initializing catalog: {str(e)}", err=True)
@@ -230,6 +286,18 @@ def duck(catalog_path=None, duckdb_args=()):
         if len(catalog.catalog.get("tables", {}).keys()) == 0:
             raise click.ClickException("No tables found in catalog. Run 'ice commit' to create a table.")
         
+        cleanup_catalog_path = None
+        if catalog_path:
+            catalog_json_path = os.path.abspath(catalog_path)
+        elif getattr(catalog, "storage_backend", "json") == "json" and catalog.uri:
+            catalog_json_path = catalog.uri
+        else:
+            temp_catalog = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+            json.dump(catalog.catalog, temp_catalog, indent=2)
+            temp_catalog.close()
+            catalog_json_path = temp_catalog.name
+            cleanup_catalog_path = temp_catalog.name
+
         # Get SQL template and substitute variables
         template_str = get_sql_template().template
         # Add S3 configuration at the beginning of the script
@@ -246,7 +314,7 @@ def duck(catalog_path=None, duckdb_args=()):
             template_str = lines[0] + '\n' + s3_config + '\n'.join(lines[1:])
         template = Template(template_str)
 
-        sql = template.substitute(CATALOG_JSON=catalog.uri)
+        sql = template.substitute(CATALOG_JSON=catalog_json_path)
 
         # Write the SQL to a temporary file
         with tempfile.NamedTemporaryFile(mode='w', suffix='.sql', delete=False) as f:
@@ -259,6 +327,9 @@ def duck(catalog_path=None, duckdb_args=()):
 
         # Clean up
         os.unlink(f.name)
+        if cleanup_catalog_path and os.path.exists(cleanup_catalog_path):
+            os.unlink(cleanup_catalog_path)
+        catalog.close()
 
     except Exception as e:
         click.echo(f"Error starting DuckDB CLI: {str(e)}", err=True)

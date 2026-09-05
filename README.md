@@ -20,6 +20,7 @@ Boring Catalog stores all Iceberg catalog state in a single JSON file:
   - `catalog_uri`: the path to your catalog JSON file
   - `catalog_name`: the logical name of your catalog
   - `properties`: additional properties (e.g., warehouse location)
+- Alternatively, you can opt into an experimental [SlateDB](https://slatedb.io/) backend which stores namespaces and tables in a key-value database on local disk or object storage.
 
 ## Installation
 ```bash
@@ -84,6 +85,36 @@ select * from catalog.namespaces;   -- list namespaces
 select * from catalog.tables;       -- list tables
 select * from <namespace>.<table>;  -- query iceberg table
 ```
+
+### SlateDB backend (experimental)
+
+If you want a backend that scales beyond a single JSON file, you can initialize the catalog using SlateDB:
+
+```bash
+ice init --catalog-backend slatedb --slatedb-path /tmp/mycatalog.db -p warehouse=/data/warehouse
+```
+
+This creates a SlateDB database at `/tmp/mycatalog.db` to store namespace and table metadata while the Iceberg data itself continues to live under the configured `warehouse`. When targeting object storage, pass `--slatedb-url` (for example `s3://mybucket/catalog-state`) and optionally `--slatedb-env-file` with credentials consumable by SlateDB.
+
+Once initialized, the CLI and Python API behave the same regardless of backend. You can inspect the current backend and its configuration in `.ice/index`.
+
+## Development
+
+### Prerequisites
+- Install [uv](https://docs.astral.sh/uv/) for environment and task management.
+- Ensure Python 3.10+ is available locally.
+
+### Environment Setup
+```bash
+uv pip install -e .[dev]
+```
+
+### Quality Gates
+- Lint: `uv run ruff check .`
+- Format: `uv run ruff format .`
+- Tests: `uv run pytest`
+
+Run these commands (or the relevant subset) before pushing changes or opening a pull request.
 
 ## Python Usage
 
